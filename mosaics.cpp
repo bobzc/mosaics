@@ -1,9 +1,12 @@
 #define _CRT_SECURE_NO_DEPRECATE
-#include <opencv/cv.h>
-#include <opencv/cxcore.h>
-#include <opencv/highgui.h>
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <iostream>
+#include <fstream>
+#include <string>
 
-#include <stdio.h>
+
 #include <math.h>
 #include <limits.h>
 #include <stdio.h>
@@ -12,7 +15,7 @@
 #define IMG_SRC_PATH "./src/" 					  	 // path of image sources
 #define PROJ_PATH "/home/bobzc/pool/mosaics/"         // path of the project
 #define RST_IMG_PATH "./result/"						 // path of result images
-
+#define TMP_IMG_PATH "./target/"
 
 #define MAXSIZE 256
 #define MINSIZE 16
@@ -22,134 +25,111 @@
 using namespace cv;
 using namespace std;
 
-IplImage *match(IplImage *src, int searchRange, IplImage *db[] )
-{
-	int i,j,k;
-	int matchIndex = 0;
-	int maxValid = 0;
-	IplImage* src16 = cvCreateImage(cvSize(MINSIZE,MINSIZE), src->depth,src->nChannels );
-	cvResize(src, src16, CV_INTER_LINEAR);
-	uchar * src16Data = (uchar *)src16->imageData;
-	int minDiff = INT_MAX ;
-	for(int searchIndex = 1; searchIndex <= searchRange ;searchIndex++)
-	{
-		int valid = 0;
-		IplImage* temp16 = db[5*(searchIndex-1)];
-		uchar * tempData = (uchar *)temp16->imageData;
-		for ( i = 0; i < src16->height ; i++)
-			for ( j = 0; j < src16->width ; j++)
-			{
-				int diff = 0;
-				for (k = 0; k < src16->nChannels ; k++)
-				{
-					int pixel1 = src16Data[i*src16->widthStep+j*src16->nChannels+k];
-					int pixel2 = tempData[i*src16->widthStep+j*src16->nChannels+k];
-					diff += ( pixel1 - pixel2 ) * (pixel1 - pixel2);
-				}
-				if ( diff<THRESHOLD )
-				{
-					valid++;
-				}
-			}
-		if (valid > maxValid)
-		{
-			maxValid = valid;
-			matchIndex = searchIndex;
-		}
-	}
-	if (maxValid < src16->imageSize * 0.2)
-	{
-		return src16;
-	}
-	IplImage* matchedImage = db[5*(matchIndex-1)];
-	cvReleaseImage(&src16);
-	return matchedImage;
 
-}
+string to_string(int);
+void load_db(Mat *, int, int);
+void show_image(Mat);
 
 int main(int argc, char* argv[]){
-	char fpath[256];
-	char fname[128];
+	string fpath("");
+	string fname;
 	
 	// get the path of the target image
-	printf("Input the name of the target image:\t");
-	scanf("%s", fname);
-	sprintf(fpath, "%s%s", IMG_SRC_PATH, fname);
-	printf("Processing %s...\n", fpath);
+	cout << "Input the name of the target image: ";
+	cin >> fname;
+	fpath.append(IMG_SRC_PATH).append(fname);
+	cout << "Processing " << fpath << " ..." << endl;
 
-	// load target image
-	IplImage *src = cvLoadImage(fpath, 1);
+	//load target image
+	Mat src = imread(fpath, 1);
 
-	// load database images
-	IplImage *db[NUMOFIMG * 5];
-	printf("Loading data...");
-	for (int i = 1; i <= NUMOFIMG ;i++)
-	{
-		for ( int j = 0; j < 5; j ++)
-		{
-			int k = 16 * pow(2, j);
-			sprintf( fpath, "%s%d/%d.jpg", DB_PATH, k, i );		
-			db[5 * (i-1) + j] = cvLoadImage(fpath, 1);
-		}
-	}
-	printf("\t[ OK ]\n");  
+	// result image
+	Mat result = src.clone();
 
 	// match
-	IplImage* matchTile;
-	IplImage* result  = cvCreateImage(cvSize(src->width,src->height ),src->depth,src->nChannels );
-	for (int i = 0; i < src->width/MINSIZE; i++)
-	{
-		for (int j = 0; j < src->height/MINSIZE; j++)
-		{
+	for (int i = 0; i < src.cols/MINSIZE; i++){
+		for (int j = 0; j < src.rows/MINSIZE; j++){
 			int origin_x = i * MINSIZE;
 			int origin_y = j * MINSIZE;
+		
+			Mat tile (src, Rect(origin_x, origin_y, MINSIZE, MINSIZE));
 
-			CvRect rect = cvRect( origin_x, origin_y, MINSIZE, MINSIZE);
-			cvSetImageROI( src, rect );
-			IplImage* dst = cvCreateImage(cvSize(MINSIZE ,MINSIZE ),src->depth,src->nChannels );
-			cvCopy( src , dst , 0 );  
-			cvResetImageROI( src );
+			// invoke script to match image
+			string tmp_path(TMP_IMG_PATH);
+			imwrite(tmp_path.append("tmp.jpg"), tile);
+			string commend("./match_img.py "); 
+			system(commend.append("tmp.jpg").c_str());
 
-			matchTile = match(dst, NUMOFIMG , db);
+			// get result
+			string img_name;
+			ifstream fp("tmp.txt");
+			getline(fp, img_name);
 
-			for (int x = 0; x<MINSIZE; x++){
-				for (int y = 0; y < MINSIZE; y++){
-					for (int z = 0; z<3;z++){
-						result->imageData[(j*MINSIZE+x)*result->widthStep+(i*MINSIZE+y)*result->nChannels+z] 
-							= matchTile->imageData[x*matchTile->widthStep+y*matchTile->nChannels+z];
-					}
-				}
-			}
-			
-			cvReleaseImage(&dst);
+			// read image
+			string img_path("");
+			img_path.append(IMG_SRC_PATH).append(to_string(MINSIZE)).append("/").append(img_name);
+			Mat match = imread(img_path, 1);
+			match.copyTo(result(Rect(origin_x, origin_y, MINSIZE, MINSIZE)));
 		}
-		printf("\t%d%%\tFinished\n", 100* i / (src->width/MINSIZE));
+		cout << i / (src.cols/ (float) MINSIZE) * 100 << "%" << endl;
 	}
 
-	// get result image path
-	char rst_path[256];
-	sprintf(rst_path, "%s%s", RST_IMG_PATH, fname);
-
-	// save result image
-	printf("Saving result image in %s ...\n", rst_path);
-	cvSaveImage(rst_path, result);
-
-	// release resources
-	cvReleaseImage(&src);
-	//cvReleaseImage(&result);
-	for (int i = 0; i< NUMOFIMG ; i++) 
-		for (int j =0; j< 5; j++)
-			cvReleaseImage(&db[5 * i + j]);
-	return 0;
-
-	//IplImage *matchedImage = match(src , 2000);
-	//cvNamedWindow("Target Image", CV_WINDOW_AUTOSIZE);
-	//cvShowImage("Target Image", src);
-	//cvNamedWindow("Matched Image", CV_WINDOW_AUTOSIZE);
-	//cvShowImage("Matched Image", matchedImage);
-	//cvWaitKey(0);
-	//cvReleaseImage(&src);
-	//cvReleaseImage(&matchedImage);
-	//cvDestroyAllWindows();
-	//targetLoad();
+	string rst_path(RST_IMG_PATH);
+	imwrite(rst_path.append(fname) ,result);
 }
+
+
+// convert integer to string
+string to_string(int number){
+    string number_string = "";
+    char ones_char;
+    int ones = 0;
+    while(true){
+        ones = number % 10;
+        switch(ones){
+            case 0: ones_char = '0'; break;
+            case 1: ones_char = '1'; break;
+            case 2: ones_char = '2'; break;
+            case 3: ones_char = '3'; break;
+            case 4: ones_char = '4'; break;
+            case 5: ones_char = '5'; break;
+            case 6: ones_char = '6'; break;
+            case 7: ones_char = '7'; break;
+            case 8: ones_char = '8'; break;
+            case 9: ones_char = '9'; break;
+			default: perror("Trouble in converting int to string!");
+        }
+        number -= ones;
+        number_string = ones_char + number_string;
+        if(number == 0){
+            break;
+        }
+        number = number/10;
+    }
+    return number_string;
+}
+
+
+void load_db(Mat *db, int img_num, int scl_num){
+	printf("Loading data...");
+	for (int i = 1; i <= img_num ;i++){
+		for ( int j = 0; j < scl_num; j ++){
+			int k = 16 * pow(2, j);
+			string img_path(DB_PATH);
+			img_path.append(to_string(k)).append("/");
+			img_path.append(to_string(i)).append(".jpg");
+			db[5 * (i-1) + j] = imread(img_path, 1);
+		}
+	}
+	printf("\t[ OK ]\n"); 
+}
+
+
+void show_image(Mat image){
+	namedWindow("Show Image", CV_WINDOW_AUTOSIZE);
+	imshow("Show Image", image);
+	waitKey(0);
+}
+
+
+
